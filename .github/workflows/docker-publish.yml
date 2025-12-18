@@ -1,25 +1,50 @@
-name: Docker Build & Publish
+name: Docker Build & Android Publish
 
 on:
   push:
     branches: [ "main" ]
-    # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ "main" ]
 
 env:
   REGISTRY: ghcr.io
-  # ghcr.io requires lowercase image names
   IMAGE_NAME: ${{ github.repository_owner }}/dongguatv
 
 jobs:
-  build:
+  # 任务 1：构建 Android APK
+  build-apk:
+    if: startsWith(github.ref, 'refs/tags/') # 只有推送标签时才编译 APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build APK
+        run: ./gradlew assembleRelease
+
+      - name: Upload APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dongguatv-apk
+          path: app/build/outputs/apk/release/*.apk
+
+  # 任务 2：构建 Docker 镜像 (保留原逻辑)
+  build-docker:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -45,7 +70,6 @@ jobs:
             type=semver,pattern={{version}}
 
       - name: Build and push Docker image
-        id: build-and-push
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -54,3 +78,22 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # 任务 3：创建 Release 并关联 APK
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-apk, build-docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK from Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dongguatv-apk
+
+      - name: Release APK
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "**/*.apk"
+          generate_release_notes: true
